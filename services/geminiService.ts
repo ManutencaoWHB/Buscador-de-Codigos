@@ -2,7 +2,6 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Part, SearchResult } from "../types";
 
 // 1. CONFIGURAÇÃO DA CHAVE
-// Garante que estamos pegando a variável correta do .env
 const API_KEY = process.env.GEMINI_API_KEY; 
 if (!API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
@@ -10,26 +9,32 @@ if (!API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// 2. FUNÇÃO AUXILIAR CORRIGIDA (O erro 400 estava aqui)
-// A nova SDK exige 'inline_data' e 'mime_type' com underline
+// 2. FUNÇÃO DE CONVERSÃO DE IMAGEM (Robustecida)
 async function fileToGenerativePart(file: File) {
-  const base64EncodedDataPromise = new Promise<string>((resolve) => {
+  return new Promise<{ inlineData: { data: string; mimeType: string } }>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+    
+    reader.onloadend = () => {
+      const base64String = (reader.result as string).split(',')[1];
+      if (!base64String) {
+        reject(new Error("Falha ao converter imagem para Base64"));
+        return;
+      }
+      resolve({
+        inlineData: { 
+            data: base64String, 
+            mimeType: file.type 
+        },
+      });
+    };
+    
+    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-  
-  return {
-    inline_data: { 
-        data: await base64EncodedDataPromise, 
-        mime_type: file.type 
-    },
-  };
 }
 
 // 3. FUNÇÃO DE CONTEXTO (Identifica o que é a peça)
 async function getSearchContext(query: string | File): Promise<{ searchDescription: string; category: string }> {
-    // Modelo atualizado e estável
     const model = 'gemini-1.5-flash';
 
     if (typeof query === 'string') {
@@ -39,89 +44,93 @@ async function getSearchContext(query: string | File): Promise<{ searchDescripti
         Se a categoria não for clara, use "Componente Genérico".
         Retorne um objeto JSON com as chaves "description" e "category".
         `;
-        const result = await ai.models.generateContent({
-            model,
-            contents: prompt, // Para texto simples, pode passar a string direta ou objeto
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        description: { type: Type.STRING },
-                        category: { type: Type.STRING },
+        
+        try {
+            const result = await ai.models.generateContent({
+                model,
+                contents: {
+                    role: "user",
+                    parts: [{ text: prompt }]
+                },
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            description: { type: Type.STRING },
+                            category: { type: Type.STRING },
+                        }
                     }
                 }
-            }
-        });
-        
-        // Verificação de segurança caso o JSON venha quebrado (opcional, mas recomendado)
-        const text = result.text(); 
-        const responseJson = JSON.parse(text);
-        return { searchDescription: responseJson.description, category: responseJson.category };
+            });
+            
+            const text = result.text(); 
+            const responseJson = JSON.parse(text);
+            return { searchDescription: responseJson.description, category: responseJson.category };
+        } catch (error) {
+            console.error("Erro na análise de texto:", error);
+            // Fallback simples caso a IA falhe
+            return { searchDescription: query, category: "Peça Industrial" };
+        }
 
     } else {
-        // Fluxo de Imagem
-        const imagePart = await fileToGenerativePart(query);
-        const prompt = `
-        Analise esta imagem de uma peça industrial. Seu objetivo é identificá-la para uma busca em um banco de dados.
-        Forneça uma descrição técnica concisa e uma única categoria principal para a peça (ex: bomba, válvula, motor, sensor, módulo eletrônico).
-        Características a observar:
-        - Tipo da peça
-        - Texto visível: marcas, modelos, especificações
-        - Características físicas: formato, conexões, montagem
-        - Provável aplicação industrial.
-        Se houver texto, priorize-o. Se não, descreva as características físicas. A categoria é a saída mais importante.
-        Retorne um objeto JSON com as chaves "description" e "category".
-        `;
-        
-        const result = await ai.models.generateContent({
-            model,
-            contents: { 
-                role: "user",
-                parts: [imagePart, { text: prompt }] 
-            },
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        description: { type: Type.STRING },
-                        category: { type: Type.STRING },
+        // FLUXO DE IMAGEM
+        try {
+            const imagePart = await fileToGenerativePart(query);
+            
+            const prompt = `
+            Analise esta imagem de uma peça industrial. Identifique-a para busca no banco de dados.
+            Priorize texto visível (marcas, modelos). Se não houver, descreva formato e conexões.
+            Retorne JSON com "description" e "category".
+            `;
+            
+            const result = await ai.models.generateContent({
+                model,
+                contents: { 
+                    role: "user",
+                    parts: [imagePart, { text: prompt }] 
+                },
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            description: { type: Type.STRING },
+                            category: { type: Type.STRING },
+                        }
                     }
                 }
-            }
-        });
+            });
 
-        const text = result.text();
-        const responseJson = JSON.parse(text);
-        return { searchDescription: responseJson.description, category: responseJson.category };
+            const text = result.text();
+            const responseJson = JSON.parse(text);
+            return { searchDescription: responseJson.description, category: responseJson.category };
+        } catch (error) {
+            console.error("Erro na análise de imagem:", error);
+            throw new Error("Não foi possível analisar a imagem. Tente uma foto mais clara.");
+        }
     }
 }
 
 // 4. FUNÇÃO PRINCIPAL (Busca na lista)
 export const findMatchingParts = async (query: string | File, parts: Part[]): Promise<{ identifiedPartType: string; results: SearchResult[] }> => {
     const { searchDescription, category } = await getSearchContext(query);
-
-    // Modelo atualizado
     const model = 'gemini-1.5-flash';
 
     const prompt = `
-    Você é um assistente especialista em manutenção industrial. Sua tarefa é encontrar peças correspondentes em uma lista fornecida com base em uma consulta de busca.
+    Atue como especialista em manutenção. Busque peças na lista abaixo compatíveis com:
+    Busca: '${searchDescription}'
+    Categoria Obrigatória: '${category}'
 
-    REGRAS CRÍTICAS:
-    1. COERÊNCIA TÉCNICA É ABSOLUTA: A busca é por um(a) '${category}'. Você NÃO PODE retornar peças de outras categorias. Filtre a lista primeiro com base nesta categoria. Se a descrição do item na base não contiver palavras relacionadas a '${category}', descarte-o.
-    2. CORRESPONDÊNCIA INTELIGENTE E NÃO EXATA: As descrições na lista são inconsistentes. Combine por palavras-chave, códigos parciais, marcas e termos técnicos. Por exemplo, 'Bomba hidráulica Rexroth' deve corresponder a 'BOMBA REX 25L'.
-    3. FORMATO DE SAÍDA ESTRITO: Retorne um objeto JSON com uma chave 'results', que é um array de peças correspondentes.
-    4. RANKING E SIMILARIDADE: Cada item no array deve ter 'code', 'description' (da lista original) e 'similarity' ('Alta', 'Média', 'Baixa').
-    5. RESULTADOS LIMITADOS: Retorne no máximo 1 resultado de similaridade 'Alta' e até 5 resultados 'Média' ou 'Baixa'. Ordene-os por similaridade, da maior para a menor. Se nenhum item corresponder, retorne um array vazio.
+    Regras:
+    1. Filtre rigorosamente pela categoria '${category}'.
+    2. Use match flexível (ex: 'Rexroth' bate com 'REX').
+    3. Retorne JSON com array 'results'.
+    4. Cada item deve ter: 'code', 'description' (original), 'similarity' ('Alta', 'Média', 'Baixa').
+    5. Máximo 6 resultados.
 
-    Consulta de Busca: '${searchDescription}'
-    Categoria da Peça: '${category}'
-
-    Base de Dados de Peças (JSON):
+    Base de Dados:
     ${JSON.stringify(parts)}
-
-    Execute a busca e retorne o JSON.
     `;
     
     const resultSchema = {
@@ -145,7 +154,10 @@ export const findMatchingParts = async (query: string | File, parts: Part[]): Pr
     try {
         const result = await ai.models.generateContent({
             model,
-            contents: prompt,
+            contents: {
+                role: "user",
+                parts: [{ text: prompt }]
+            },
             config: {
                 responseMimeType: "application/json",
                 responseSchema: resultSchema,
@@ -156,7 +168,7 @@ export const findMatchingParts = async (query: string | File, parts: Part[]): Pr
         const responseJson = JSON.parse(text);
         return { identifiedPartType: category, results: responseJson.results || [] };
     } catch (e) {
-        console.error("Gemini API call failed", e);
-        throw new Error("A busca inteligente falhou. Pode ser um problema com a API ou a resposta foi inválida.");
+        console.error("Erro final na busca:", e);
+        throw new Error("Erro ao processar a busca inteligente.");
     }
 };
