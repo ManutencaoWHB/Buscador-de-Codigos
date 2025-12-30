@@ -1,29 +1,21 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Part, SearchResult } from "../types";
 
-const API_KEY = process.env.API_KEY;
+// 1. AQUI: Mudamos para GEMINI_API_KEY para bater com o .env e o GitHub
+const API_KEY = process.env.GEMINI_API_KEY; 
 if (!API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
 }
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// Helper to convert File to a Gemini-compatible format
 async function fileToGenerativePart(file: File) {
-  const base64EncodedDataPromise = new Promise<string>((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-    reader.readAsDataURL(file);
-  });
-  return {
-    inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
-  };
+  // ... (pode manter igual) ...
 }
 
-// Function to get description and category from either text or image
 async function getSearchContext(query: string | File): Promise<{ searchDescription: string; category: string }> {
-    const model = 'gemini-flash-latest';
+    // 2. AQUI: Use o nome oficial e estável do modelo
+    const model = 'gemini-1.5-flash';
 
     if (typeof query === 'string') {
         const prompt = `
@@ -84,8 +76,8 @@ async function getSearchContext(query: string | File): Promise<{ searchDescripti
 export const findMatchingParts = async (query: string | File, parts: Part[]): Promise<{ identifiedPartType: string; results: SearchResult[] }> => {
     const { searchDescription, category } = await getSearchContext(query);
 
-    const model = 'gemini-3-flash-preview';
-
+    // 3. AQUI: Aquele "gemini-3-flash-preview" ia dar erro 404. Use este:
+    const model = 'gemini-1.5-flash';
     const prompt = `
     Você é um assistente especialista em manutenção industrial. Sua tarefa é encontrar peças correspondentes em uma lista fornecida com base em uma consulta de busca.
 
