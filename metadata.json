@@ -1,0 +1,5 @@
+{
+  "name": "Buscador Inteligente de Peças",
+  "description": "Uma aplicação web para buscar códigos de peças de manutenção industrial usando IA, a partir de uma base de dados Excel, com busca por texto ou imagem.",
+  "requestFramePermissions": []
+}
