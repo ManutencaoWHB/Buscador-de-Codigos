@@ -5,12 +5,16 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
+      // ADICIONE ESTA LINHA ABAIXO COM O NOME DO SEU REPOSITÓRIO
+      base: '/Buscador-de-Codigos/', 
+      
       server: {
         port: 3000,
         host: '0.0.0.0',
       },
       plugins: [react()],
       define: {
+        // Isso aqui garante que seu código consiga ler a chave que vamos configurar
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
       },
