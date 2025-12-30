@@ -1,7 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Part, SearchResult } from "../types";
 
-// 1. AQUI: Mudamos para GEMINI_API_KEY para bater com o .env e o GitHub
+// 1. CONFIGURAÇÃO DA CHAVE
+// Garante que estamos pegando a variável correta do .env
 const API_KEY = process.env.GEMINI_API_KEY; 
 if (!API_KEY) {
     throw new Error("API_KEY environment variable is not set.");
@@ -9,12 +10,26 @@ if (!API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
+// 2. FUNÇÃO AUXILIAR CORRIGIDA (O erro 400 estava aqui)
+// A nova SDK exige 'inline_data' e 'mime_type' com underline
 async function fileToGenerativePart(file: File) {
-  // ... (pode manter igual) ...
+  const base64EncodedDataPromise = new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+    reader.readAsDataURL(file);
+  });
+  
+  return {
+    inline_data: { 
+        data: await base64EncodedDataPromise, 
+        mime_type: file.type 
+    },
+  };
 }
 
+// 3. FUNÇÃO DE CONTEXTO (Identifica o que é a peça)
 async function getSearchContext(query: string | File): Promise<{ searchDescription: string; category: string }> {
-    // 2. AQUI: Use o nome oficial e estável do modelo
+    // Modelo atualizado e estável
     const model = 'gemini-1.5-flash';
 
     if (typeof query === 'string') {
@@ -26,7 +41,7 @@ async function getSearchContext(query: string | File): Promise<{ searchDescripti
         `;
         const result = await ai.models.generateContent({
             model,
-            contents: prompt,
+            contents: prompt, // Para texto simples, pode passar a string direta ou objeto
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -38,9 +53,14 @@ async function getSearchContext(query: string | File): Promise<{ searchDescripti
                 }
             }
         });
-        const responseJson = JSON.parse(result.text);
+        
+        // Verificação de segurança caso o JSON venha quebrado (opcional, mas recomendado)
+        const text = result.text(); 
+        const responseJson = JSON.parse(text);
         return { searchDescription: responseJson.description, category: responseJson.category };
+
     } else {
+        // Fluxo de Imagem
         const imagePart = await fileToGenerativePart(query);
         const prompt = `
         Analise esta imagem de uma peça industrial. Seu objetivo é identificá-la para uma busca em um banco de dados.
@@ -53,9 +73,13 @@ async function getSearchContext(query: string | File): Promise<{ searchDescripti
         Se houver texto, priorize-o. Se não, descreva as características físicas. A categoria é a saída mais importante.
         Retorne um objeto JSON com as chaves "description" e "category".
         `;
+        
         const result = await ai.models.generateContent({
             model,
-            contents: { parts: [imagePart, { text: prompt }] },
+            contents: { 
+                role: "user",
+                parts: [imagePart, { text: prompt }] 
+            },
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -67,17 +91,20 @@ async function getSearchContext(query: string | File): Promise<{ searchDescripti
                 }
             }
         });
-        const responseJson = JSON.parse(result.text);
+
+        const text = result.text();
+        const responseJson = JSON.parse(text);
         return { searchDescription: responseJson.description, category: responseJson.category };
     }
 }
 
-// Main function to find matching parts
+// 4. FUNÇÃO PRINCIPAL (Busca na lista)
 export const findMatchingParts = async (query: string | File, parts: Part[]): Promise<{ identifiedPartType: string; results: SearchResult[] }> => {
     const { searchDescription, category } = await getSearchContext(query);
 
-    // 3. AQUI: Aquele "gemini-3-flash-preview" ia dar erro 404. Use este:
+    // Modelo atualizado
     const model = 'gemini-1.5-flash';
+
     const prompt = `
     Você é um assistente especialista em manutenção industrial. Sua tarefa é encontrar peças correspondentes em uma lista fornecida com base em uma consulta de busca.
 
@@ -124,7 +151,9 @@ export const findMatchingParts = async (query: string | File, parts: Part[]): Pr
                 responseSchema: resultSchema,
             }
         });
-        const responseJson = JSON.parse(result.text);
+
+        const text = result.text();
+        const responseJson = JSON.parse(text);
         return { identifiedPartType: category, results: responseJson.results || [] };
     } catch (e) {
         console.error("Gemini API call failed", e);
